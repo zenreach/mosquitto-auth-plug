@@ -91,7 +91,22 @@ static int get_string_envs(CURL *curl, const char *required_env, char *querystri
 	return (num);
 }
 
-static int http_post(void *handle, char *uri, const char *clientid, const char *username, const char *password, const char *topic, int acc, int method)
+// Used for copying an HTTP response into res
+static size_t write_callback(char *ptr, size_t size, size_t nmemb, char **res) {
+    size_t len = size * nmemb;
+    *res = (char *)malloc(len + 1); // +1 for '\0'
+    if (*res == NULL) {
+		_fatal("ENOMEM");
+		return 0;
+    }
+
+    memcpy(*res, ptr, len);
+    (*res)[len] = '\0';
+
+    return len;
+}
+
+static int http_post(void *handle, char *uri, const char *clientid, const char *username, const char *password, const char *topic, int acc, int method, char** response)
 {
 	struct http_backend *conf = (struct http_backend *)handle;
 	CURL *curl;
@@ -192,6 +207,8 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	curl_easy_setopt(curl, CURLOPT_USERNAME, username);
 	curl_easy_setopt(curl, CURLOPT_PASSWORD, password);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
 
 	re = curl_easy_perform(curl);
 	if (re == CURLE_OK) {
@@ -310,14 +327,17 @@ char *be_http_getuser(void *handle, const char *username, const char *password, 
 	re = BACKEND_ERROR;
 	try = 0;
 
+	char *response = NULL;
 	while (re == BACKEND_ERROR && try <= conf->retry_count) {
 		try++;
-		re = http_post(handle, conf->getuser_uri, NULL, username, password, NULL, -1, METHOD_GETUSER);
+		re = http_post(handle, conf->getuser_uri, NULL, username, password, NULL, -1, METHOD_GETUSER, &response);
 	}
 	if (re == 1) {
-		*authenticated = 1;
+		if (authenticated != NULL) {
+			*authenticated = 1;
+		}
 	}
-	return NULL;
+	return response;
 };
 
 int be_http_superuser(void *handle, const char *username)
@@ -329,7 +349,9 @@ int be_http_superuser(void *handle, const char *username)
 	try = 0;
 	while (re == BACKEND_ERROR && try <= conf->retry_count) {
 		try++;
-		re = http_post(handle, conf->superuser_uri, NULL, username, NULL, NULL, -1, METHOD_SUPERUSER);
+		char *response = NULL;
+		re = http_post(handle, conf->superuser_uri, NULL, username, NULL, NULL, -1, METHOD_SUPERUSER, &response);
+		free(response);
 	}
 	return re;
 };
@@ -344,7 +366,9 @@ int be_http_aclcheck(void *handle, const char *clientid, const char *username, c
 
 	while (re == BACKEND_ERROR && try <= conf->retry_count) {
 		try++;
-		re = http_post(conf, conf->aclcheck_uri, clientid, username, NULL, topic, acc, METHOD_ACLCHECK);
+		char *response = NULL;
+		re = http_post(conf, conf->aclcheck_uri, clientid, username, NULL, topic, acc, METHOD_ACLCHECK, &response);
+		free(response);
 	}
 	return re;
 };
